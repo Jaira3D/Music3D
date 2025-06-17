@@ -1,156 +1,143 @@
-const express = require("express");
-const path = require("path");
-const ytSearch = require("yt-search");
-const fs = require("fs");
-const bodyParser = require("body-parser");
-const { v4: uuidv4 } = require("uuid");
+const express = require('express');
+const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const session = require('express-session');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
-// Chemins des fichiers
-const MUSIC_FILE = path.join(__dirname, "data", "musics.json");
-const VOTE_FILE = path.join(__dirname, "data", "votes.json");
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static('public'));
 
-// Middleware
-app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, "public")));
+app.use(session({
+  secret: 'secret_session_key_123',
+  resave: false,
+  saveUninitialized: true
+}));
 
-// 🔍 Recherche YouTube
-app.get("/search", async (req, res) => {
+const DATA_FILE = path.join(__dirname, 'musics.json');
+let musics = [];
+if (fs.existsSync(DATA_FILE)) {
+  musics = JSON.parse(fs.readFileSync(DATA_FILE));
+}
+
+// Middleware Admin Auth
+function adminAuth(req, res, next) {
+  if (req.session && req.session.isAdmin) return next();
+  return res.redirect('/admin_login.html');
+}
+
+// --- API Deezer Search ---
+app.get('/api/search', async (req, res) => {
   const q = req.query.q;
-  if (!q) return res.json([]);
+  if (!q) return res.status(400).json({ error: 'Requête vide' });
 
   try {
-    const result = await ytSearch(q);
-    const videos = result.videos.slice(0, 10).map(video => ({
-      title: video.title,
-      videoId: video.videoId
+    const response = await axios.get(`https://api.deezer.com/search?q=${encodeURIComponent(q)}`);
+    const tracks = response.data.data.map(track => ({
+      title: `${track.title} - ${track.artist.name}`,
+      link: track.link,
+      preview: track.preview,
+      id: track.id
     }));
-    res.json(videos);
-  } catch (err) {
-    console.error("Erreur recherche YouTube :", err);
-    res.status(500).json({ error: "Erreur recherche YouTube", detail: err.message });
+    res.json(tracks);
+  } catch (error) {
+    console.error("Erreur Deezer API:", error.message);
+    res.status(500).json({ error: "Erreur API Deezer" });
   }
 });
 
-// 📥 Ajouter une musique
-app.post("/add", (req, res) => {
-  const { title, videoId, pseudo } = req.body;
-  if (!title || !videoId || !pseudo) return res.status(400).json({ error: "Champs manquants" });
+// Ajouter une musique
+app.post('/api/add', (req, res) => {
+  const { title, user } = req.body;
+  if (!title || !user) return res.status(400).json({ error: "Données manquantes" });
 
-  const musics = readJSON(MUSIC_FILE);
-  const alreadyExists = musics.find(m => m.videoId === videoId);
-  if (alreadyExists) return res.status(409).json({ error: "Cette musique existe déjà !" });
+  // Doublon ?
+  if (musics.find(m => m.title === title)) {
+    return res.status(409).json({ error: "Musique déjà ajoutée" });
+  }
 
-  const newMusic = {
-    id: uuidv4(),
-    title,
-    videoId,
-    pseudo,
-    votes: 0
-  };
-
-  musics.push(newMusic);
-  writeJSON(MUSIC_FILE, musics);
-  res.json({ success: true, music: newMusic });
+  musics.push({ title, user, votes: 0, voters: [] });
+  saveData();
+  res.json({ success: true, musics });
 });
 
-// 🗑️ Supprimer une musique par son auteur uniquement
-app.post("/delete", (req, res) => {
-  const { id, pseudo } = req.body;
-  if (!id || !pseudo) return res.status(400).json({ error: "Champs manquants" });
+// Supprimer une musique (par propriétaire ou admin)
+app.delete('/api/delete', (req, res) => {
+  const { title, user, admin } = req.body;
+  if (!title || (!user && !admin)) return res.status(400).json({ error: "Données manquantes" });
 
-  const musics = readJSON(MUSIC_FILE);
-  const music = musics.find(m => m.id === id);
-  if (!music) return res.status(404).json({ error: "Musique non trouvée" });
+  const index = musics.findIndex(m => m.title === title);
+  if (index === -1) return res.status(404).json({ error: "Musique non trouvée" });
 
-  if (music.pseudo !== pseudo) return res.status(403).json({ error: "Non autorisé" });
+  if (!admin && musics[index].user !== user) {
+    return res.status(403).json({ error: "Pas autorisé à supprimer cette musique" });
+  }
 
-  const updated = musics.filter(m => m.id !== id);
-  writeJSON(MUSIC_FILE, updated);
+  musics.splice(index, 1);
+  saveData();
   res.json({ success: true });
 });
 
-// 🔒 Login admin
-app.post("/admin/login", (req, res) => {
-  const { login, password } = req.body;
-  if (login === "jaira" && password === "baguette") {
-    res.json({ success: true });
-  } else {
-    res.status(403).json({ error: "Identifiants incorrects" });
-  }
-});
-
-// 📊 Voter pour une musique
-app.post("/vote", (req, res) => {
-  const { musicId, user } = req.body;
-  if (!musicId || !user) return res.status(400).json({ error: "Champs manquants" });
-
-  const votes = readJSON(VOTE_FILE);
-  const musics = readJSON(MUSIC_FILE);
-
-  const alreadyVoted = votes.find(v => v.musicId === musicId && v.user === user);
-  if (alreadyVoted) return res.status(409).json({ error: "Déjà voté !" });
-
-  const music = musics.find(m => m.id === musicId);
-  if (!music) return res.status(404).json({ error: "Musique non trouvée" });
-
-  music.votes += 1;
-  writeJSON(MUSIC_FILE, musics);
-
-  votes.push({ musicId, user });
-  writeJSON(VOTE_FILE, votes);
-
-  res.json({ success: true, votes: music.votes });
-});
-
-// 🧾 Récupérer toutes les musiques (pour la page publique)
-app.get("/musics", (req, res) => {
-  const musics = readJSON(MUSIC_FILE);
+// Récupérer toutes les musiques
+app.get('/api/musics', (req, res) => {
   res.json(musics);
 });
 
-// 🛠️ Supprimer une musique côté admin
-app.post("/admin/delete", (req, res) => {
-  const { id } = req.body;
-  if (!id) return res.status(400).json({ error: "ID requis" });
+// Voter pour une musique
+app.post('/api/vote', (req, res) => {
+  const { title, user } = req.body;
+  if (!title || !user) return res.status(400).json({ error: "Données manquantes" });
 
-  const musics = readJSON(MUSIC_FILE);
-  const updated = musics.filter(m => m.id !== id);
-  writeJSON(MUSIC_FILE, updated);
-  res.json({ success: true });
+  const music = musics.find(m => m.title === title);
+  if (!music) return res.status(404).json({ error: "Musique non trouvée" });
+
+  if (music.voters.includes(user)) {
+    return res.status(409).json({ error: "Vous avez déjà voté pour cette musique" });
+  }
+
+  music.votes++;
+  music.voters.push(user);
+  saveData();
+  res.json({ success: true, votes: music.votes });
 });
 
-// 📤 Export JSON de la liste (pour Spotify par ex.)
-app.get("/admin/export", (req, res) => {
-  const musics = readJSON(MUSIC_FILE);
-  const sorted = musics.sort((a, b) => b.votes - a.votes);
-  res.json(sorted);
+// Exporter la liste (admin)
+app.get('/admin/export', adminAuth, (req, res) => {
+  const lines = musics.map(m => `${m.title} (proposé par ${m.user})`);
+  res.setHeader('Content-Disposition', 'attachment; filename=musics.txt');
+  res.setHeader('Content-Type', 'text/plain');
+  res.send(lines.join('\n'));
 });
 
-// 📂 Création des fichiers JSON si non existants
-ensureFile(MUSIC_FILE, []);
-ensureFile(VOTE_FILE, []);
+// Page Admin Login
+app.get('/admin_login.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin_login.html'));
+});
 
-// Utils
-function readJSON(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-function writeJSON(file, data) {
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
-}
-
-function ensureFile(file, initial) {
-  if (!fs.existsSync(path.dirname(file))) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+// Admin Login POST
+app.post('/admin_login', (req, res) => {
+  const { username, password } = req.body;
+  if (username === 'jaira' && password === 'baguette') {
+    req.session.isAdmin = true;
+    res.redirect('/admin.html');
+  } else {
+    res.send('Identifiants incorrects. <a href="/admin_login.html">Retour</a>');
   }
-  if (!fs.existsSync(file)) {
-    fs.writeFileSync(file, JSON.stringify(initial, null, 2));
-  }
+});
+
+// Page Admin protégée
+app.get('/admin.html', adminAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+// Sauvegarder données
+function saveData() {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(musics, null, 2));
 }
 
 app.listen(PORT, () => {
-  console.log(`✅ Serveur lancé sur http://localhost:${PORT}`);
+  console.log(`Serveur lancé sur http://localhost:${PORT}`);
 });
