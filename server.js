@@ -6,7 +6,7 @@ const app = express();
 const PORT = 3000;
 
 
-const YOUTUBE_API_KEY = "AIzaSyBkWWlOSWQOwQwbN3XmyJ76Txjx6FV25ms"; // Remplace ici
+const YOUTUBE_API_KEY = "ytbapi"; // Remplace ici
 const DATA_FILE = "musiques.json";
 
 app.use(express.json());
