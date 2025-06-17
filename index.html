@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Propose une musique</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>🎵 Propose une musique</h1>
+
+    <label for="pseudo">Ton pseudo :</label>
+    <input type="text" id="pseudo" placeholder="Ton pseudo" autocomplete="off" />
+
+    <label for="search">Recherche un titre YouTube :</label>
+    <input type="text" id="search" placeholder="Tape un titre..." autocomplete="off" />
+    <ul id="results"></ul>
+
+    <h2>🎶 Titres proposés</h2>
+    <ul id="list"></ul>
+
+    <h2>Vote pour tes titres préférés</h2>
+    <ul id="voteList"></ul>
+
+    <a href="admin.html"><button id="adminBtn">Admin</button></a>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>

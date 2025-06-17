@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Admin Panel</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>🔐 Admin Panel</h1>
+
+    <div id="login">
+      <input type="text" id="adminUser" placeholder="Login" autocomplete="off" />
+      <input type="password" id="adminPass" placeholder="Mot de passe" autocomplete="off" />
+      <button onclick="login()">Se connecter</button>
+    </div>
+
+    <div id="adminPanel" style="display:none;">
+      <h2>Liste des musiques</h2>
+      <ul id="adminList"></ul>
+      <button onclick="exportList()">📤 Exporter la playlist</button>
+    </div>
+  </div>
+  <script src="admin.js"></script>
+</body>
+</html>
