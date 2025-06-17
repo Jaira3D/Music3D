@@ -5,8 +5,6 @@ const fetch = require("node-fetch");
 const app = express();
 const PORT = 3000;
 
-
-const YOUTUBE_API_KEY = "AIzaSyBkWWlOSWQOwQwbN3XmyJ76Txjx6FV25ms"; // Remplace ici
 const DATA_FILE = "musiques.json";
 
 app.use(express.json());
@@ -18,23 +16,25 @@ if (fs.existsSync(DATA_FILE)) {
   musiques = JSON.parse(fs.readFileSync(DATA_FILE));
 }
 
-// YouTube Search API
+// Deezer Search API (remplace la recherche YouTube)
 app.get("/search", async (req, res) => {
   const q = req.query.q;
   if (!q) return res.json([]);
   try {
-    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=10&q=${encodeURIComponent(q)}&type=video&key=${YOUTUBE_API_KEY}`;
-    const ytRes = await fetch(url);
-    if (!ytRes.ok) {
-      const text = await ytRes.text();
-      console.error("Erreur YouTube API:", text);
-      return res.status(500).json({ error: "Erreur API YouTube", detail: text });
+    const url = `https://api.deezer.com/search?q=${encodeURIComponent(q)}`;
+    const deezerRes = await fetch(url);
+    if (!deezerRes.ok) {
+      const text = await deezerRes.text();
+      console.error("Erreur Deezer API:", text);
+      return res.status(500).json({ error: "Erreur API Deezer", detail: text });
     }
-    const data = await ytRes.json();
-    if (!data.items) return res.json([]);
-    const results = data.items.map(item => ({
-      title: item.snippet.title,
-      videoId: item.id.videoId
+    const data = await deezerRes.json();
+    if (!data.data) return res.json([]);
+    const results = data.data.map(item => ({
+      title: item.title + " - " + item.artist.name,
+      id: item.id,
+      preview: item.preview,
+      link: item.link
     }));
     res.json(results);
   } catch (err) {
