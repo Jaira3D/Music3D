@@ -1,93 +1,156 @@
 const express = require("express");
-const fs = require("fs");
 const path = require("path");
-const fetch = require("node-fetch");
+const ytSearch = require("yt-search");
+const fs = require("fs");
+const bodyParser = require("body-parser");
+const { v4: uuidv4 } = require("uuid");
+
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
+// Chemins des fichiers
+const MUSIC_FILE = path.join(__dirname, "data", "musics.json");
+const VOTE_FILE = path.join(__dirname, "data", "votes.json");
 
-const YOUTUBE_API_KEY = "AIzaSyBkWWlOSWQOwQwbN3XmyJ76Txjx6FV25ms"; // Remplace ici
-const DATA_FILE = "musiques.json";
+// Middleware
+app.use(bodyParser.json());
+app.use(express.static(path.join(__dirname, "public")));
 
-app.use(express.json());
-app.use(express.static(__dirname));
-
-// Chargement fichier musiques
-let musiques = [];
-if (fs.existsSync(DATA_FILE)) {
-  musiques = JSON.parse(fs.readFileSync(DATA_FILE));
-}
-
-// YouTube Search API
+// 🔍 Recherche YouTube
 app.get("/search", async (req, res) => {
   const q = req.query.q;
   if (!q) return res.json([]);
+
   try {
-    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=10&q=${encodeURIComponent(q)}&type=video&key=${YOUTUBE_API_KEY}`;
-    const ytRes = await fetch(url);
-    if (!ytRes.ok) {
-      const text = await ytRes.text();
-      console.error("Erreur YouTube API:", text);
-      return res.status(500).json({ error: "Erreur API YouTube", detail: text });
-    }
-    const data = await ytRes.json();
-    if (!data.items) return res.json([]);
-    const results = data.items.map(item => ({
-      title: item.snippet.title,
-      videoId: item.id.videoId
+    const result = await ytSearch(q);
+    const videos = result.videos.slice(0, 10).map(video => ({
+      title: video.title,
+      videoId: video.videoId
     }));
-    res.json(results);
+    res.json(videos);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Erreur serveur", detail: err.message });
+    console.error("Erreur recherche YouTube :", err);
+    res.status(500).json({ error: "Erreur recherche YouTube", detail: err.message });
   }
 });
 
-// Ajout musique
+// 📥 Ajouter une musique
 app.post("/add", (req, res) => {
-  const { title, pseudo } = req.body;
-  if (!title || !pseudo) return res.status(400).send("Données manquantes");
-  if (musiques.find(m => m.title === title)) return res.status(400).send("Musique déjà ajoutée");
-  musiques.push({ title, pseudo, votes: 0, voters: [] });
-  fs.writeFileSync(DATA_FILE, JSON.stringify(musiques, null, 2));
-  res.send("Musique ajoutée");
+  const { title, videoId, pseudo } = req.body;
+  if (!title || !videoId || !pseudo) return res.status(400).json({ error: "Champs manquants" });
+
+  const musics = readJSON(MUSIC_FILE);
+  const alreadyExists = musics.find(m => m.videoId === videoId);
+  if (alreadyExists) return res.status(409).json({ error: "Cette musique existe déjà !" });
+
+  const newMusic = {
+    id: uuidv4(),
+    title,
+    videoId,
+    pseudo,
+    votes: 0
+  };
+
+  musics.push(newMusic);
+  writeJSON(MUSIC_FILE, musics);
+  res.json({ success: true, music: newMusic });
 });
 
-// Liste musiques
-app.get("/list", (req, res) => {
-  res.json(musiques);
-});
-
-// Supprimer musique
+// 🗑️ Supprimer une musique par son auteur uniquement
 app.post("/delete", (req, res) => {
-  const { title, pseudo } = req.body;
-  const idx = musiques.findIndex(m => m.title === title && (m.pseudo === pseudo || pseudo === "admin"));
-  if (idx === -1) return res.status(403).send("Suppression non autorisée");
-  musiques.splice(idx, 1);
-  fs.writeFileSync(DATA_FILE, JSON.stringify(musiques, null, 2));
-  res.send("Musique supprimée");
+  const { id, pseudo } = req.body;
+  if (!id || !pseudo) return res.status(400).json({ error: "Champs manquants" });
+
+  const musics = readJSON(MUSIC_FILE);
+  const music = musics.find(m => m.id === id);
+  if (!music) return res.status(404).json({ error: "Musique non trouvée" });
+
+  if (music.pseudo !== pseudo) return res.status(403).json({ error: "Non autorisé" });
+
+  const updated = musics.filter(m => m.id !== id);
+  writeJSON(MUSIC_FILE, updated);
+  res.json({ success: true });
 });
 
-// Voter
+// 🔒 Login admin
+app.post("/admin/login", (req, res) => {
+  const { login, password } = req.body;
+  if (login === "jaira" && password === "baguette") {
+    res.json({ success: true });
+  } else {
+    res.status(403).json({ error: "Identifiants incorrects" });
+  }
+});
+
+// 📊 Voter pour une musique
 app.post("/vote", (req, res) => {
-  const { title, user } = req.body;
-  if (!title || !user) return res.status(400).send("Données manquantes");
-  const music = musiques.find(m => m.title === title);
-  if (!music) return res.status(404).send("Musique non trouvée");
-  if (!music.voters) music.voters = [];
-  if (music.voters.includes(user)) return res.status(400).send("Vous avez déjà voté");
-  music.votes++;
-  music.voters.push(user);
-  fs.writeFileSync(DATA_FILE, JSON.stringify(musiques, null, 2));
-  res.send("Vote pris en compte");
+  const { musicId, user } = req.body;
+  if (!musicId || !user) return res.status(400).json({ error: "Champs manquants" });
+
+  const votes = readJSON(VOTE_FILE);
+  const musics = readJSON(MUSIC_FILE);
+
+  const alreadyVoted = votes.find(v => v.musicId === musicId && v.user === user);
+  if (alreadyVoted) return res.status(409).json({ error: "Déjà voté !" });
+
+  const music = musics.find(m => m.id === musicId);
+  if (!music) return res.status(404).json({ error: "Musique non trouvée" });
+
+  music.votes += 1;
+  writeJSON(MUSIC_FILE, musics);
+
+  votes.push({ musicId, user });
+  writeJSON(VOTE_FILE, votes);
+
+  res.json({ success: true, votes: music.votes });
 });
 
-// Export playlist
-app.get("/export", (req, res) => {
-  const txt = musiques.map(m => m.title).join("\n");
-  const filePath = path.join(__dirname, "playlist_export.txt");
-  fs.writeFileSync(filePath, txt);
-  res.download(filePath, "playlist_export.txt");
+// 🧾 Récupérer toutes les musiques (pour la page publique)
+app.get("/musics", (req, res) => {
+  const musics = readJSON(MUSIC_FILE);
+  res.json(musics);
 });
 
-app.listen(PORT, () => console.log(`Serveur lancé: http://localhost:${PORT}`));
+// 🛠️ Supprimer une musique côté admin
+app.post("/admin/delete", (req, res) => {
+  const { id } = req.body;
+  if (!id) return res.status(400).json({ error: "ID requis" });
+
+  const musics = readJSON(MUSIC_FILE);
+  const updated = musics.filter(m => m.id !== id);
+  writeJSON(MUSIC_FILE, updated);
+  res.json({ success: true });
+});
+
+// 📤 Export JSON de la liste (pour Spotify par ex.)
+app.get("/admin/export", (req, res) => {
+  const musics = readJSON(MUSIC_FILE);
+  const sorted = musics.sort((a, b) => b.votes - a.votes);
+  res.json(sorted);
+});
+
+// 📂 Création des fichiers JSON si non existants
+ensureFile(MUSIC_FILE, []);
+ensureFile(VOTE_FILE, []);
+
+// Utils
+function readJSON(file) {
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+function writeJSON(file, data) {
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+}
+
+function ensureFile(file, initial) {
+  if (!fs.existsSync(path.dirname(file))) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+  }
+  if (!fs.existsSync(file)) {
+    fs.writeFileSync(file, JSON.stringify(initial, null, 2));
+  }
+}
+
+app.listen(PORT, () => {
+  console.log(`✅ Serveur lancé sur http://localhost:${PORT}`);
+});
